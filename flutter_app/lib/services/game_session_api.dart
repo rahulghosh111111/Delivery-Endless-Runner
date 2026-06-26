@@ -14,12 +14,16 @@ class StartSessionResult {
   final DateTime startsAt;
   final DateTime endsAt;
   final int bestScore;
+  final int lifetimeCoins;
+  final int pendingRewards;
 
   StartSessionResult({
     required this.sessionId,
     required this.startsAt,
     required this.endsAt,
     required this.bestScore,
+    required this.lifetimeCoins,
+    required this.pendingRewards,
   });
 
   factory StartSessionResult.fromJson(Map<String, dynamic> j) {
@@ -28,6 +32,8 @@ class StartSessionResult {
       startsAt: DateTime.parse(j['starts_at']),
       endsAt: DateTime.parse(j['ends_at']),
       bestScore: j['best_score'] ?? 0,
+      lifetimeCoins: j['lifetime_coins'] ?? 0,
+      pendingRewards: j['pending_rewards'] ?? 0,
     );
   }
 }
@@ -35,13 +41,19 @@ class StartSessionResult {
 class CompleteSessionResult {
   final int bestScore;
   final int rewardCoins;
+  final int lifetimeCoins;
 
-  CompleteSessionResult({required this.bestScore, required this.rewardCoins});
+  CompleteSessionResult({
+    required this.bestScore, 
+    required this.rewardCoins,
+    required this.lifetimeCoins,
+  });
 
   factory CompleteSessionResult.fromJson(Map<String, dynamic> j) {
     return CompleteSessionResult(
       bestScore: j['best_score'] ?? 0,
       rewardCoins: j['reward_coins'] ?? 0,
+      lifetimeCoins: j['lifetime_coins'] ?? 0,
     );
   }
 }
@@ -110,5 +122,15 @@ class GameSessionApi {
       throw Exception('Failed to complete session: ${res.statusCode}');
     }
     return CompleteSessionResult.fromJson(jsonDecode(res.body)['data']);
+  }
+
+  Future<void> redeemRewards(String token) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/game/redeem'),
+      headers: _headers(token),
+    );
+    if (res.statusCode != 200) {
+      throw Exception('Failed to redeem rewards: ${res.statusCode}');
+    }
   }
 }

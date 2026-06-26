@@ -8,9 +8,17 @@ import 'dart:math';
 class CoinSpot {
   final double localX; // x position relative to the start of its segment
   final double y; // absolute y (world height) where the coin sits
+  final int value;
+  final bool isBonus;
   bool collected;
 
-  CoinSpot({required this.localX, required this.y, this.collected = false});
+  CoinSpot({
+    required this.localX,
+    required this.y,
+    this.value = 1,
+    this.isBonus = false,
+    this.collected = false,
+  });
 }
 
 /// One procedurally generated "tile" of terrain (~20-30s of travel at base

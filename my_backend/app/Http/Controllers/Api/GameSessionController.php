@@ -18,7 +18,7 @@ use Carbon\Carbon;
 class GameSessionController extends Controller
 {
     private const MAX_SCORE_PER_SECOND = 6.0; // generous ceiling, tune from playtesting
-    private const MAX_COINS_PER_SECOND = 0.35;
+    private const MAX_COINS_PER_SECOND = 0.50; // increased from 0.35 to account for bonus coins
 
     public function start(Request $request)
     {
@@ -47,6 +47,8 @@ class GameSessionController extends Controller
                 'starts_at' => $session->starts_at->toIso8601String(),
                 'ends_at' => $session->ends_at->toIso8601String(),
                 'best_score' => $best->best_score ?? 0,
+                'lifetime_coins' => $request->user()->lifetime_coins,
+                'pending_rewards' => floor($request->user()->lifetime_coins / 10000) * 5,
             ],
         ], 201);
     }
@@ -68,11 +70,22 @@ class GameSessionController extends Controller
         $maxPlausibleScore = (int) ($elapsed * self::MAX_SCORE_PER_SECOND);
         $maxPlausibleCoins = (int) ($elapsed * self::MAX_COINS_PER_SECOND);
 
-        $session->update([
-            'score' => min($validated['score'], $maxPlausibleScore),
-            'coins' => min($validated['coins'], $maxPlausibleCoins),
-            'distance' => $validated['distance'],
-        ]);
+        $validatedCoins = min($validated['coins'], $maxPlausibleCoins);
+        
+        DB::transaction(function () use ($session, $validated, $validatedCoins, $maxPlausibleScore, $request) {
+            $deltaCoins = $validatedCoins - $session->coins;
+            
+            $session->update([
+                'score' => min($validated['score'], $maxPlausibleScore),
+                'coins' => $validatedCoins,
+                'distance' => $validated['distance'],
+            ]);
+            
+            if ($deltaCoins > 0) {
+                $user = $request->user();
+                $user->increment('lifetime_coins', $deltaCoins);
+            }
+        });
 
         return response()->json(['data' => ['ok' => true]]);
     }
@@ -97,6 +110,8 @@ class GameSessionController extends Controller
         $best = null;
 
         DB::transaction(function () use ($request, $session, $validated, $finalScore, $finalCoins, &$best) {
+            $deltaCoins = $finalCoins - $session->coins;
+
             $session->update([
                 'score' => $finalScore,
                 'coins' => $finalCoins,
@@ -104,6 +119,10 @@ class GameSessionController extends Controller
                 'status' => 'completed',
                 'reward_coins' => $finalCoins,
             ]);
+
+            if ($deltaCoins > 0) {
+                $request->user()->increment('lifetime_coins', $deltaCoins);
+            }
 
             $best = GameBestScore::firstOrCreate(
                 ['user_id' => $request->user()->id],
@@ -126,6 +145,44 @@ class GameSessionController extends Controller
             'data' => [
                 'best_score' => $best->best_score,
                 'reward_coins' => $finalCoins,
+                'lifetime_coins' => $request->user()->fresh()->lifetime_coins,
+            ],
+        ]);
+    }
+
+    public function redeem(Request $request)
+    {
+        $user = $request->user();
+        
+        if ($user->lifetime_coins < 100000) {
+            return response()->json([
+                'message' => 'Insufficient coins to redeem.',
+            ], 400);
+        }
+
+        $amount = 50; // ₹50 for 100,000 coins
+
+        DB::transaction(function () use ($user, $amount) {
+            DB::table('reward_redemptions')->insert([
+                'user_id' => $user->id,
+                'amount' => $amount,
+                'coins_at_redemption' => $user->lifetime_coins,
+                'created_at' => Carbon::now(),
+                'updated_at' => Carbon::now(),
+            ]);
+
+            $user->update(['lifetime_coins' => 0]);
+
+            // TODO: Credit User Wallet (Stripe, Internal Ledger, etc.)
+            // $user->wallet()->increment('balance', $amount);
+        });
+
+        Log::info("User {$user->id} redeemed {$amount} rewards and reset lifetime_coins.");
+
+        return response()->json([
+            'data' => [
+                'lifetime_coins' => 0,
+                'pending_rewards' => 0,
             ],
         ]);
     }

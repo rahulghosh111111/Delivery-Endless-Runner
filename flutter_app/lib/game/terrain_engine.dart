@@ -31,6 +31,8 @@ class TerrainEngine {
 
   int _shapeCycle = 0;
 
+  int _totalCoinsSpawned = 0;
+
   TerrainEngine({
     this.amplitude = 80,
     this.baseline = 0,
@@ -111,8 +113,8 @@ class TerrainEngine {
   List<CoinSpot> _spawnCoins(List<double> heights) {
     final coins = <CoinSpot>[];
 
-    // Rule: random count, 1 to 5 coins per segment.
-    final count = 1 + _rng.nextInt(5);
+    // Rule: random count, 3 to 10 coins per segment for less gap.
+    final count = 3 + _rng.nextInt(8);
 
     // Rule: random pattern choice.
     final pattern = _rng.nextInt(4); // 0 single/spread, 1 cluster, 2 zigzag, 3 mixed
@@ -130,7 +132,7 @@ class TerrainEngine {
       }
     }
 
-    final minSpacingIdx = (heights.length / (count * 2)).clamp(2, 1000).toInt();
+    final minSpacingIdx = (heights.length / (count * 3)).clamp(1, 1000).toInt();
     final usedIndices = <int>[];
 
     int pickIndex() {
@@ -163,10 +165,16 @@ class TerrainEngine {
       final tooClose = usedIndices.any((u) => (u - idx).abs() < minSpacingIdx);
       if (tooClose) continue;
       usedIndices.add(idx);
+      
+      _totalCoinsSpawned++;
+      bool isBonus = (_totalCoinsSpawned % 50 == 0);
+
       coins.add(CoinSpot(
         localX: idx * sampleStep,
         // float the coin slightly above the road surface
         y: heights[idx] - 34,
+        value: isBonus ? 5 : 1,
+        isBonus: isBonus,
       ));
     }
 

@@ -74,6 +74,8 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
   double _score = 0;
   int _coins = 0;
   int _bestScore = 0;
+  int _lifetimeCoins = 0;
+  int _pendingRewards = 0;
   GamePhase _phase = GamePhase.intro;
 
   Timer? _syncTimer;
@@ -132,6 +134,8 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
       _serverMissionStart = res.startsAt;
       _serverMissionEnd = res.endsAt;
       _bestScore = res.bestScore;
+      _lifetimeCoins = res.lifetimeCoins;
+      _pendingRewards = res.pendingRewards;
     } catch (_) {
       // Fallback: run mission on local clock if the API is unreachable so
       // the game is still playable offline; server will reject reward
@@ -199,14 +203,15 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
   }
 
   void _checkCoinCollisions() {
-    final playerWorldX = _distance + playerScreenX;
     for (final seg in _segments) {
-      for (final coin in seg.coins) {
-        if (coin.collected) continue;
-        final coinWorldX = seg.worldStartX + coin.localX;
-        if ((coinWorldX - playerWorldX).abs() < 22) {
-          coin.collected = true;
-          _coins++;
+      for (final spot in seg.coins) {
+        if (spot.collected) continue;
+        if (spot.localX + seg.worldStartX > _distance + playerScreenX - 30 &&
+            spot.localX + seg.worldStartX < _distance + playerScreenX + 30) {
+          spot.collected = true;
+          _coins += spot.value;
+          _lifetimeCoins = min(100000, _lifetimeCoins + spot.value);
+          _pendingRewards = (_lifetimeCoins ~/ 10000) * 5;
           _score += 25;
         }
       }
@@ -237,13 +242,41 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
           coins: _coins,
           distance: _distance,
         );
-        _bestScore = res.bestScore;
+        if (res != null) {
+          if (mounted) {
+            setState(() {
+              _bestScore = res.bestScore;
+              _lifetimeCoins = res.lifetimeCoins;
+              _pendingRewards = (_lifetimeCoins ~/ 10000) * 5;
+            });
+          }
+        }
       } catch (_) {
         // Network failure on completion: keep local result, retry silently
         // could be queued here if you want offline-first behaviour.
       }
     }
-    setState(() {});
+  }
+
+  Future<void> _redeemRewards() async {
+    try {
+      await _api.redeemRewards(widget.authToken);
+      if (mounted) {
+        setState(() {
+          _lifetimeCoins = 0;
+          _pendingRewards = 0;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('🎉 ₹50 Redeemed to your wallet!')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to redeem rewards. Please try again.')),
+        );
+      }
+    }
   }
 
   void _restart() {
@@ -302,26 +335,70 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
               top: 24,
               left: 24,
               right: 24,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Column(
                 children: [
-                  _hudText('SCORE: ${_score.floor().toString().padLeft(5, '0')}'),
                   Row(
-                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      _hudText('BEST: ${_bestScore.toString().padLeft(5, '0')}'),
-                      const SizedBox(width: 12),
-                      GestureDetector(
-                        onTap: _togglePause,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.black, width: 2),
-                            borderRadius: BorderRadius.circular(4)
+                      _hudText('SCORE: ${_score.floor().toString().padLeft(5, '0')}'),
+                      _hudText('TIME: ${_fmtTime(_timeRemaining)}'),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _hudText('BEST: ${_bestScore.toString().padLeft(5, '0')}'),
+                          const SizedBox(width: 12),
+                          GestureDetector(
+                            onTap: _togglePause,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.black, width: 2),
+                                borderRadius: BorderRadius.circular(4)
+                              ),
+                              child: _hudText(_phase == GamePhase.paused ? '►' : 'II'),
+                            ),
                           ),
-                          child: _hudText(_phase == GamePhase.paused ? '►' : 'II'),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  // Progress Bar & Redeem Button
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                _hudText('LIFETIME COINS: $_lifetimeCoins / 100000'),
+                                _hudText('REWARDS: ₹$_pendingRewards'),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            LinearProgressIndicator(
+                              value: (_lifetimeCoins / 100000).clamp(0.0, 1.0),
+                              backgroundColor: Colors.transparent,
+                              color: Colors.black,
+                              minHeight: 8,
+                            ),
+                          ],
                         ),
                       ),
+                      if (_lifetimeCoins >= 100000) ...[
+                        const SizedBox(width: 16),
+                        ElevatedButton(
+                          onPressed: _redeemRewards,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.black,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                          ),
+                          child: const Text('REDEEM ₹50', style: TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold)),
+                        ),
+                      ]
                     ],
                   ),
                 ],
@@ -466,8 +543,16 @@ class _RunnerPainter extends CustomPainter {
         final sx = worldX - distance;
         if (sx < -20 || sx > size.width + 20) continue;
         final cy = groundY + coin.y;
-        canvas.drawCircle(Offset(sx, cy), 9, coinPaint);
-        canvas.drawLine(Offset(sx, cy - 4), Offset(sx, cy + 4), coinPaint); // vertical line
+        
+        if (coin.isBonus) {
+          // Bonus coin: ( O ) - slightly larger with an inner ring
+          canvas.drawCircle(Offset(sx, cy), 11, coinPaint);
+          canvas.drawCircle(Offset(sx, cy), 5, coinPaint);
+        } else {
+          // Regular coin: ( I )
+          canvas.drawCircle(Offset(sx, cy), 9, coinPaint);
+          canvas.drawLine(Offset(sx, cy - 4), Offset(sx, cy + 4), coinPaint);
+        }
       }
     }
 
