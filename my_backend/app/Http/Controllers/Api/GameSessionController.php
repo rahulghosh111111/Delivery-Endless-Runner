@@ -48,7 +48,7 @@ class GameSessionController extends Controller
                 'ends_at' => $session->ends_at->toIso8601String(),
                 'best_score' => $best->best_score ?? 0,
                 'lifetime_coins' => $request->user()->lifetime_coins,
-                'pending_rewards' => floor($request->user()->lifetime_coins / 10000) * 5,
+                'pending_rewards' => floor($request->user()->lifetime_coins / 10),
             ],
         ], 201);
     }
@@ -154,15 +154,16 @@ class GameSessionController extends Controller
     {
         $user = $request->user();
         
-        if ($user->lifetime_coins < 100000) {
+        if ($user->lifetime_coins < 10) {
             return response()->json([
                 'message' => 'Insufficient coins to redeem.',
             ], 400);
         }
 
-        $amount = 50; // ₹50 for 100,000 coins
+        $amount = floor($user->lifetime_coins / 10);
+        $remainingCoins = $user->lifetime_coins % 10;
 
-        DB::transaction(function () use ($user, $amount) {
+        DB::transaction(function () use ($user, $amount, $remainingCoins) {
             DB::table('reward_redemptions')->insert([
                 'user_id' => $user->id,
                 'amount' => $amount,
@@ -171,17 +172,17 @@ class GameSessionController extends Controller
                 'updated_at' => Carbon::now(),
             ]);
 
-            $user->update(['lifetime_coins' => 0]);
+            $user->update(['lifetime_coins' => $remainingCoins]);
 
             // TODO: Credit User Wallet (Stripe, Internal Ledger, etc.)
             // $user->wallet()->increment('balance', $amount);
         });
 
-        Log::info("User {$user->id} redeemed {$amount} rewards and reset lifetime_coins.");
+        Log::info("User {$user->id} redeemed {$amount} rewards and remaining lifetime_coins: {$remainingCoins}.");
 
         return response()->json([
             'data' => [
-                'lifetime_coins' => 0,
+                'lifetime_coins' => $remainingCoins,
                 'pending_rewards' => 0,
             ],
         ]);

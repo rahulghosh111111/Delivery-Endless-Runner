@@ -24,6 +24,16 @@ import 'game_models.dart';
 import 'terrain_engine.dart';
 import '../services/game_session_api.dart';
 
+class ResponsiveHud {
+  static double getScaleFactor(double width) {
+    if (width < 360) return 0.8;
+    if (width < 480) return 0.9;
+    if (width < 768) return 1.0;
+    return 1.2;
+  }
+}
+
+
 class _Cloud {
   double x;
   double y;
@@ -79,6 +89,15 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
   GamePhase _phase = GamePhase.intro;
 
   Timer? _syncTimer;
+  DateTime? _lastSyncTime;
+
+  double get _playerScreenX {
+    final w = MediaQuery.maybeOf(context)?.size.width ?? 400;
+    final h = MediaQuery.maybeOf(context)?.size.height ?? 800;
+    final scale = min(w / 400, h / 800);
+    final logicalWidth = w / scale;
+    return logicalWidth * 0.25;
+  }
 
   @override
   void initState() {
@@ -147,15 +166,22 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
 
     // Periodic server sync for live score/coin validation (anti-cheat) and
     // session resilience if the app is killed mid-mission.
-    _syncTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+    _syncTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
       if (_sessionId != null && _phase == GamePhase.playing) {
-        _api.syncSession(
-          widget.authToken,
-          _sessionId!,
-          score: _score.floor(),
-          coins: _coins,
-          distance: _distance,
-        );
+        try {
+          await _api.syncSession(
+            widget.authToken,
+            _sessionId!,
+            score: _score.floor(),
+            coins: _coins,
+            distance: _distance,
+          );
+          if (mounted) {
+            setState(() {
+              _lastSyncTime = DateTime.now();
+            });
+          }
+        } catch (_) {}
       }
     });
   }
@@ -203,15 +229,16 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
   }
 
   void _checkCoinCollisions() {
+    final pX = _playerScreenX;
     for (final seg in _segments) {
       for (final spot in seg.coins) {
         if (spot.collected) continue;
-        if (spot.localX + seg.worldStartX > _distance + playerScreenX - 30 &&
-            spot.localX + seg.worldStartX < _distance + playerScreenX + 30) {
+        if (spot.localX + seg.worldStartX > _distance + pX - 30 &&
+            spot.localX + seg.worldStartX < _distance + pX + 30) {
           spot.collected = true;
           _coins += spot.value;
-          _lifetimeCoins = min(100000, _lifetimeCoins + spot.value);
-          _pendingRewards = (_lifetimeCoins ~/ 10000) * 5;
+          _lifetimeCoins += spot.value;
+          _pendingRewards = (_lifetimeCoins ~/ 10);
           _score += 25;
         }
       }
@@ -247,7 +274,7 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
             setState(() {
               _bestScore = res.bestScore;
               _lifetimeCoins = res.lifetimeCoins;
-              _pendingRewards = (_lifetimeCoins ~/ 10000) * 5;
+              _pendingRewards = (_lifetimeCoins ~/ 10);
             });
           }
         }
@@ -259,16 +286,45 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
   }
 
   Future<void> _redeemRewards() async {
+    final amount = _pendingRewards;
+    if (amount < 1) return;
+
     try {
       await _api.redeemRewards(widget.authToken);
       if (mounted) {
         setState(() {
-          _lifetimeCoins = 0;
+          _lifetimeCoins = _lifetimeCoins % 10;
           _pendingRewards = 0;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('🎉 ₹50 Redeemed to your wallet!')),
+
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (BuildContext context) {
+            return Dialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.check_circle, color: Colors.green, size: 64),
+                    const SizedBox(height: 16),
+                    Text('₹$amount Redeemed!', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+                    const SizedBox(height: 8),
+                    const Text('Successfully sent to your wallet.', style: TextStyle(fontFamily: 'monospace')),
+                  ],
+                ),
+              ),
+            );
+          }
         );
+
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted && Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
+        });
       }
     } catch (_) {
       if (mounted) {
@@ -328,80 +384,20 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
                 scooterImage: _scooterImage,
                 cloudImage: _cloudImage,
                 distance: _distance,
-                playerScreenX: playerScreenX,
+                playerScreenX: _playerScreenX,
               ),
             ),
-            Positioned(
-              top: 24,
-              left: 24,
-              right: 24,
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      _hudText('SCORE: ${_score.floor().toString().padLeft(5, '0')}'),
-                      _hudText('TIME: ${_fmtTime(_timeRemaining)}'),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _hudText('BEST: ${_bestScore.toString().padLeft(5, '0')}'),
-                          const SizedBox(width: 12),
-                          GestureDetector(
-                            onTap: _togglePause,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                border: Border.all(color: Colors.black, width: 2),
-                                borderRadius: BorderRadius.circular(4)
-                              ),
-                              child: _hudText(_phase == GamePhase.paused ? '►' : 'II'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  // Progress Bar & Redeem Button
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                _hudText('LIFETIME COINS: $_lifetimeCoins / 100000'),
-                                _hudText('REWARDS: ₹$_pendingRewards'),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            LinearProgressIndicator(
-                              value: (_lifetimeCoins / 100000).clamp(0.0, 1.0),
-                              backgroundColor: Colors.transparent,
-                              color: Colors.black,
-                              minHeight: 8,
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (_lifetimeCoins >= 100000) ...[
-                        const SizedBox(width: 16),
-                        ElevatedButton(
-                          onPressed: _redeemRewards,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.black,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                          ),
-                          child: const Text('REDEEM ₹50', style: TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold)),
-                        ),
-                      ]
-                    ],
-                  ),
-                ],
+            SafeArea(
+              child: GameHud(
+                score: _score.floor(),
+                timeRemaining: _timeRemaining,
+                bestScore: _bestScore,
+                lifetimeCoins: _lifetimeCoins,
+                pendingRewards: _pendingRewards,
+                isPaused: _phase == GamePhase.paused,
+                lastSyncTime: _lastSyncTime,
+                onPauseTap: _togglePause,
+                onInfoTap: _showInfoModal,
               ),
             ),
             if (_phase == GamePhase.completed) _completionOverlay(),
@@ -411,16 +407,40 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
     );
   }
 
-  Widget _hudText(String text) => Text(
-        text,
-        style: const TextStyle(
-          fontFamily: 'monospace',
-          fontSize: 18,
-          letterSpacing: 1.5,
-          fontWeight: FontWeight.bold,
-          color: Colors.black,
-        ),
+  void _showInfoModal() {
+    final wasPlaying = _phase == GamePhase.playing;
+    if (wasPlaying) _togglePause();
+
+    final isWide = MediaQuery.of(context).size.width > 600;
+
+    final modalWidget = _InfoModal(
+      lifetimeCoins: _lifetimeCoins,
+      pendingRewards: _pendingRewards,
+      lastSyncTime: _lastSyncTime,
+      onRedeemTap: () {
+        Navigator.of(context).pop();
+        _redeemRewards();
+      },
+      onClose: () => Navigator.of(context).pop(),
+    );
+
+    Future<void> future;
+    if (isWide) {
+      future = showDialog(context: context, builder: (_) => Dialog(child: modalWidget));
+    } else {
+      future = showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.white,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+        builder: (_) => FractionallySizedBox(heightFactor: 0.85, child: modalWidget),
       );
+    }
+
+    future.then((_) {
+      if (wasPlaying) _togglePause();
+    });
+  }
 
   Widget _completionOverlay() {
     return Container(
@@ -474,7 +494,13 @@ class _RunnerPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final groundY = size.height * 0.65;
+    final double scale = min(size.width / 400, size.height / 800);
+    canvas.save();
+    canvas.scale(scale);
+    
+    final logicalSize = Size(size.width / scale, size.height / scale);
+    final groundY = logicalSize.height * 0.65;
+
     final linePaint = Paint()
       ..color = Colors.black
       ..strokeWidth = 3
@@ -489,14 +515,14 @@ class _RunnerPainter extends CustomPainter {
     final cloudPaint = Paint()..color = Colors.black.withOpacity(0.08); // faint fill
     final cloudStroke = Paint()..color = Colors.black.withOpacity(0.6)..style = PaintingStyle.stroke..strokeWidth = 2;
     for (final c in clouds) {
-      final cx = (c.x - distance * c.speedFactor) % (size.width + 300) - 150;
+      final cx = (c.x - distance * c.speedFactor) % (logicalSize.width + 300) - 150;
       _drawCloud(canvas, cx, c.y, c.type, cloudPaint, cloudStroke);
     }
 
     // --- Ground texture (dots and dashes) ---
     final dashPaint = Paint()..color = Colors.black..style = PaintingStyle.fill;
     final double startWorldX = (distance / 16).floor() * 16.0;
-    final double endWorldX = ((distance + size.width) / 16).ceil() * 16.0;
+    final double endWorldX = ((distance + logicalSize.width) / 16).ceil() * 16.0;
     
     for (double wx = startWorldX; wx <= endWorldX; wx += 16) {
       final double sx = wx - distance;
@@ -522,7 +548,7 @@ class _RunnerPainter extends CustomPainter {
     // --- Ground line ---
     final path = Path();
     bool started = false;
-    for (double sx = 0; sx <= size.width; sx += 4) {
+    for (double sx = 0; sx <= logicalSize.width; sx += 4) {
       final worldX = distance + sx;
       final h = _heightAt(worldX) ?? 0;
       final y = groundY + h;
@@ -541,7 +567,7 @@ class _RunnerPainter extends CustomPainter {
         if (coin.collected) continue;
         final worldX = seg.worldStartX + coin.localX;
         final sx = worldX - distance;
-        if (sx < -20 || sx > size.width + 20) continue;
+        if (sx < -20 || sx > logicalSize.width + 20) continue;
         final cy = groundY + coin.y;
         
         if (coin.isBonus) {
@@ -566,7 +592,8 @@ class _RunnerPainter extends CustomPainter {
     canvas.translate(playerScreenX, playerY);
     canvas.rotate(slope);
     _drawScooter(canvas);
-    canvas.restore();
+    canvas.restore(); // restore rotation/translation
+    canvas.restore(); // restore global scale
   }
 
   double? _heightAt(double worldX) {
@@ -702,4 +729,214 @@ class _RunnerPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _RunnerPainter oldDelegate) => true;
+}
+
+class GameHud extends StatelessWidget {
+  final int score;
+  final Duration timeRemaining;
+  final int bestScore;
+  final int lifetimeCoins;
+  final int pendingRewards;
+  final bool isPaused;
+  final DateTime? lastSyncTime;
+  final VoidCallback onPauseTap;
+  final VoidCallback onInfoTap;
+
+  const GameHud({
+    Key? key,
+    required this.score,
+    required this.timeRemaining,
+    required this.bestScore,
+    required this.lifetimeCoins,
+    required this.pendingRewards,
+    required this.isPaused,
+    this.lastSyncTime,
+    required this.onPauseTap,
+    required this.onInfoTap,
+  }) : super(key: key);
+
+  String _fmtTime(Duration d) {
+    final m = d.inMinutes.toString().padLeft(2, '0');
+    final s = (d.inSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  Widget _hudText(String text, double scaleFactor, {bool bold = true}) => FittedBox(
+    fit: BoxFit.scaleDown,
+    alignment: Alignment.centerLeft,
+    child: Text(
+      text,
+      style: TextStyle(
+        fontFamily: 'monospace',
+        fontSize: 18 * scaleFactor,
+        letterSpacing: 1.5 * scaleFactor,
+        fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+        color: Colors.black,
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final scaleFactor = ResponsiveHud.getScaleFactor(constraints.maxWidth);
+        
+        final leftCluster = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _hudText('SCORE: ${score.toString().padLeft(5, '0')}', scaleFactor),
+            const SizedBox(height: 4),
+            _hudText('LIFETIME COINS: $lifetimeCoins', scaleFactor, bold: false),
+          ],
+        );
+
+        final centerCluster = Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _hudText('TIME: ${_fmtTime(timeRemaining)}', scaleFactor),
+          ],
+        );
+
+        final rightCluster = Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _hudText('BEST: ${bestScore.toString().padLeft(5, '0')}', scaleFactor),
+                SizedBox(width: 8 * scaleFactor),
+                GestureDetector(
+                  onTap: onInfoTap,
+                  child: Icon(Icons.info_outline, color: Colors.black, size: 24 * scaleFactor),
+                ),
+                SizedBox(width: 8 * scaleFactor),
+                GestureDetector(
+                  onTap: onPauseTap,
+                  child: Icon(isPaused ? Icons.play_arrow : Icons.pause, color: Colors.black, size: 24 * scaleFactor),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            _hudText('REWARDS: ₹$pendingRewards', scaleFactor, bold: false),
+          ],
+        );
+
+        return Padding(
+          padding: EdgeInsets.all(16.0 * scaleFactor),
+          child: constraints.maxWidth > 600
+              ? Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(child: leftCluster),
+                    Expanded(child: centerCluster),
+                    Expanded(child: Align(alignment: Alignment.topRight, child: rightCluster)),
+                  ],
+                )
+              : Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.start,
+                  spacing: 16 * scaleFactor,
+                  runSpacing: 16 * scaleFactor,
+                  children: [
+                    leftCluster,
+                    rightCluster,
+                    SizedBox(
+                      width: double.infinity,
+                      child: centerCluster,
+                    ),
+                  ],
+                ),
+        );
+      },
+    );
+  }
+}
+
+class _InfoModal extends StatelessWidget {
+  final int lifetimeCoins;
+  final int pendingRewards;
+  final DateTime? lastSyncTime;
+  final VoidCallback onRedeemTap;
+  final VoidCallback onClose;
+
+  const _InfoModal({
+    required this.lifetimeCoins,
+    required this.pendingRewards,
+    this.lastSyncTime,
+    required this.onRedeemTap,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final syncText = lastSyncTime == null
+        ? 'Not synced yet'
+        : 'Last updated ${DateTime.now().difference(lastSyncTime!).inSeconds}s ago';
+        
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Game Info & Rewards', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+                IconButton(icon: const Icon(Icons.close), onPressed: onClose),
+              ],
+            ),
+            const Divider(),
+            const SizedBox(height: 8),
+            const Text('How to play:', style: TextStyle(fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+            const Text('Touch your screen to move the scooter. Get a delivery to the destination to complete the mission.', style: TextStyle(fontFamily: 'monospace')),
+            const SizedBox(height: 16),
+            const Text('Scoring:', style: TextStyle(fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+            const Text('Distance increases your score. Collecting coins gives a +25 score bonus. "Best" tracks your highest score across all sessions.', style: TextStyle(fontFamily: 'monospace')),
+            const SizedBox(height: 16),
+            const Text('Lifetime Coins:', style: TextStyle(fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(
+              value: ((lifetimeCoins % 10) / 10).clamp(0.0, 1.0),
+              backgroundColor: Colors.grey[300],
+              color: Colors.black,
+              minHeight: 12,
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('${lifetimeCoins % 10} / 10 to next ₹1', style: const TextStyle(fontFamily: 'monospace')),
+                Text(syncText, style: const TextStyle(color: Colors.grey, fontSize: 12, fontFamily: 'monospace')),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const Text('Rewards:', style: TextStyle(fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+            const Text('Collect 10 coins to earn a ₹1 wallet reward!', style: TextStyle(fontFamily: 'monospace')),
+            const SizedBox(height: 16),
+            Text('Current Balance: ₹$pendingRewards', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+            const Spacer(),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: pendingRewards >= 1 ? onRedeemTap : null,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.black,
+                  disabledBackgroundColor: Colors.grey,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+                child: Text('REDEEM ₹$pendingRewards', style: TextStyle(color: pendingRewards >= 1 ? Colors.white : Colors.white70, fontFamily: 'monospace', fontWeight: FontWeight.bold)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

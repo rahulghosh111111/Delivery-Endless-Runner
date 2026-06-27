@@ -40,3 +40,24 @@ services:
       - "3000:80"
     volumes:
       - ./flutter_app/build/web:/usr/share/nginx/html
+
+  flutter-builder:
+    image: ghcr.io/cirruslabs/flutter:stable
+    volumes:
+      - ./flutter_app:/app
+    working_dir: /app
+    command: >
+      bash -c "
+      flutter pub get;
+      last_time=\"\";
+      while true; do
+        current_time=$$(find lib pubspec.yaml -type f -exec stat -c %Y {} + | sort -n | tail -1);
+        if [ \"$$current_time\" != \"$$last_time\" ]; then
+          echo 'Detected changes. Building Flutter web...';
+          flutter build web;
+          last_time=$$current_time;
+          echo 'Build complete! Ready for you to refresh.';
+        fi;
+        sleep 5;
+      done
+      "

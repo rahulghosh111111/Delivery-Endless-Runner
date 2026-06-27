@@ -70,7 +70,7 @@ class GameSessionApi {
 
   Future<StartSessionResult> startSession(String token, Duration duration) async {
     final res = await http.post(
-      Uri.parse('$baseUrl/game/sessions'),
+      Uri.parse('$baseUrl/game/start'),
       headers: _headers(token),
       body: jsonEncode({'duration_seconds': duration.inSeconds}),
     );
@@ -88,8 +88,8 @@ class GameSessionApi {
     required double distance,
   }) async {
     try {
-      await http.patch(
-        Uri.parse('$baseUrl/game/sessions/$sessionId/sync'),
+      await http.post(
+        Uri.parse('$baseUrl/game/$sessionId/sync'),
         headers: _headers(token),
         body: jsonEncode({
           'score': score,
@@ -110,7 +110,7 @@ class GameSessionApi {
     required double distance,
   }) async {
     final res = await http.post(
-      Uri.parse('$baseUrl/game/sessions/$sessionId/complete'),
+      Uri.parse('$baseUrl/game/$sessionId/complete'),
       headers: _headers(token),
       body: jsonEncode({
         'score': score,

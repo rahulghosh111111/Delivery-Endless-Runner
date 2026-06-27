@@ -33,6 +33,50 @@ class MainMenuScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text("Delivery Game Hub"),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            tooltip: 'Rules and Awards',
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (BuildContext context) {
+                  return AlertDialog(
+                    title: const Text('Rules & Awards'),
+                    content: const SingleChildScrollView(
+                      child: ListBody(
+                        children: <Widget>[
+                          Text(
+                            'Rules:',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          Text('- Touch your screen to move the scooter'),
+                          Text('- Collect coins to increase your score.'),
+                          Text('- Get a delivery to the destination to complete the mission'),
+                          SizedBox(height: 16),
+                          Text(
+                            'Awards:',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          Text('- High scores unlock new characters.'),
+                          Text('- Collect 100 coins to get an extra life.'),
+                        ],
+                      ),
+                    ),
+                    actions: <Widget>[
+                      TextButton(
+                        child: const Text('Close'),
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                        },
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
+          ),
+        ],
       ),
       body: Center(
         child: ElevatedButton(
@@ -40,7 +84,7 @@ class MainMenuScreen extends StatelessWidget {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => DeliveryEndlessRunnerGame(
+                builder: (_) => const DeliveryEndlessRunnerGame(
                   authToken: dummyAuthToken,
                 ),
               ),
