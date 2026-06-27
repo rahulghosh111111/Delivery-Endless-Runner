@@ -21,14 +21,17 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
 import 'game_models.dart';
-import 'terrain_engine.dart';
 import '../services/game_session_api.dart';
 
+const int kCoinsPerReward = 100000;
+const int kRewardAmountInRupees = 50;
+
 class ResponsiveHud {
+  static const double tabletBreakpoint = 768;
   static double getScaleFactor(double width) {
     if (width < 360) return 0.8;
     if (width < 480) return 0.9;
-    if (width < 768) return 1.0;
+    if (width < tabletBreakpoint) return 1.0;
     return 1.2;
   }
 }
@@ -82,14 +85,18 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
   double _currentSpeed = 0; // current px/s (eased toward target)
   bool _isHolding = false;
   double _score = 0;
-  int _coins = 0;
   int _bestScore = 0;
+  int _coins = 0;
   int _lifetimeCoins = 0;
-  int _pendingRewards = 0;
+  int _redeemedRewardCoins = 0;
   GamePhase _phase = GamePhase.intro;
 
   Timer? _syncTimer;
   DateTime? _lastSyncTime;
+  bool _isRedeeming = false;
+
+  int get _unclaimedCoins => _lifetimeCoins - _redeemedRewardCoins;
+  int get _pendingRewards => (_unclaimedCoins ~/ kCoinsPerReward) * kRewardAmountInRupees;
 
   double get _playerScreenX {
     final w = MediaQuery.maybeOf(context)?.size.width ?? 400;
@@ -154,7 +161,7 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
       _serverMissionEnd = res.endsAt;
       _bestScore = res.bestScore;
       _lifetimeCoins = res.lifetimeCoins;
-      _pendingRewards = res.pendingRewards;
+      _redeemedRewardCoins = res.redeemedRewardCoins ?? 0;
     } catch (_) {
       // Fallback: run mission on local clock if the API is unreachable so
       // the game is still playable offline; server will reject reward
@@ -238,7 +245,6 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
           spot.collected = true;
           _coins += spot.value;
           _lifetimeCoins += spot.value;
-          _pendingRewards = (_lifetimeCoins ~/ 10);
           _score += 25;
         }
       }
@@ -274,7 +280,7 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
             setState(() {
               _bestScore = res.bestScore;
               _lifetimeCoins = res.lifetimeCoins;
-              _pendingRewards = (_lifetimeCoins ~/ 10);
+              _redeemedRewardCoins = res.redeemedRewardCoins ?? 0;
             });
           }
         }
@@ -287,14 +293,15 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
 
   Future<void> _redeemRewards() async {
     final amount = _pendingRewards;
-    if (amount < 1) return;
+    if (_isRedeeming || amount < kRewardAmountInRupees) return;
+
+    setState(() => _isRedeeming = true);
 
     try {
       await _api.redeemRewards(widget.authToken);
       if (mounted) {
         setState(() {
-          _lifetimeCoins = _lifetimeCoins % 10;
-          _pendingRewards = 0;
+          _redeemedRewardCoins += kCoinsPerReward * (amount ~/ kRewardAmountInRupees);
         });
 
         showDialog(
@@ -331,6 +338,10 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Failed to redeem rewards. Please try again.')),
         );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isRedeeming = false);
       }
     }
   }
@@ -411,11 +422,12 @@ class _DeliveryEndlessRunnerGameState extends State<DeliveryEndlessRunnerGame>
     final wasPlaying = _phase == GamePhase.playing;
     if (wasPlaying) _togglePause();
 
-    final isWide = MediaQuery.of(context).size.width > 600;
+    final isWide = MediaQuery.of(context).size.width > ResponsiveHud.tabletBreakpoint;
 
     final modalWidget = _InfoModal(
       lifetimeCoins: _lifetimeCoins,
       pendingRewards: _pendingRewards,
+      isRedeeming: _isRedeeming,
       lastSyncTime: _lastSyncTime,
       onRedeemTap: () {
         Navigator.of(context).pop();
@@ -827,7 +839,7 @@ class GameHud extends StatelessWidget {
 
         return Padding(
           padding: EdgeInsets.all(16.0 * scaleFactor),
-          child: constraints.maxWidth > 600
+          child: constraints.maxWidth > ResponsiveHud.tabletBreakpoint
               ? Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -860,6 +872,7 @@ class GameHud extends StatelessWidget {
 class _InfoModal extends StatelessWidget {
   final int lifetimeCoins;
   final int pendingRewards;
+  final bool isRedeeming;
   final DateTime? lastSyncTime;
   final VoidCallback onRedeemTap;
   final VoidCallback onClose;
@@ -867,6 +880,7 @@ class _InfoModal extends StatelessWidget {
   const _InfoModal({
     required this.lifetimeCoins,
     required this.pendingRewards,
+    this.isRedeeming = false,
     this.lastSyncTime,
     required this.onRedeemTap,
     required this.onClose,
@@ -881,10 +895,11 @@ class _InfoModal extends StatelessWidget {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -903,7 +918,7 @@ class _InfoModal extends StatelessWidget {
             const Text('Lifetime Coins:', style: TextStyle(fontWeight: FontWeight.bold, fontFamily: 'monospace')),
             const SizedBox(height: 8),
             LinearProgressIndicator(
-              value: ((lifetimeCoins % 10) / 10).clamp(0.0, 1.0),
+              value: ((lifetimeCoins % kCoinsPerReward) / kCoinsPerReward).clamp(0.0, 1.0),
               backgroundColor: Colors.grey[300],
               color: Colors.black,
               minHeight: 12,
@@ -912,26 +927,28 @@ class _InfoModal extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('${lifetimeCoins % 10} / 10 to next ₹1', style: const TextStyle(fontFamily: 'monospace')),
+                Text('${lifetimeCoins % kCoinsPerReward} / $kCoinsPerReward to next ₹$kRewardAmountInRupees', style: const TextStyle(fontFamily: 'monospace')),
                 Text(syncText, style: const TextStyle(color: Colors.grey, fontSize: 12, fontFamily: 'monospace')),
               ],
             ),
             const SizedBox(height: 16),
             const Text('Rewards:', style: TextStyle(fontWeight: FontWeight.bold, fontFamily: 'monospace')),
-            const Text('Collect 10 coins to earn a ₹1 wallet reward!', style: TextStyle(fontFamily: 'monospace')),
+            const Text('Collect 100,000 coins to earn a ₹50 wallet reward!', style: TextStyle(fontFamily: 'monospace')),
             const SizedBox(height: 16),
             Text('Current Balance: ₹$pendingRewards', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
-            const Spacer(),
+            const SizedBox(height: 24),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: pendingRewards >= 1 ? onRedeemTap : null,
+                onPressed: (pendingRewards >= kRewardAmountInRupees && !isRedeeming) ? onRedeemTap : null,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.black,
                   disabledBackgroundColor: Colors.grey,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
-                child: Text('REDEEM ₹$pendingRewards', style: TextStyle(color: pendingRewards >= 1 ? Colors.white : Colors.white70, fontFamily: 'monospace', fontWeight: FontWeight.bold)),
+                child: isRedeeming
+                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : Text('REDEEM ₹$pendingRewards', style: TextStyle(color: pendingRewards >= kRewardAmountInRupees ? Colors.white : Colors.white70, fontFamily: 'monospace', fontWeight: FontWeight.bold)),
               ),
             ),
           ],

@@ -41,6 +41,12 @@ class GameSessionController extends Controller
 
         $best = GameBestScore::where('user_id', $request->user()->id)->first();
 
+        $redeemedCoins = DB::table('reward_redemptions')
+            ->where('user_id', $request->user()->id)
+            ->sum('amount') / 50 * 100000;
+            
+        $unclaimedCoins = max(0, $request->user()->lifetime_coins - $redeemedCoins);
+
         return response()->json([
             'data' => [
                 'session_id' => $session->id,
@@ -48,7 +54,8 @@ class GameSessionController extends Controller
                 'ends_at' => $session->ends_at->toIso8601String(),
                 'best_score' => $best->best_score ?? 0,
                 'lifetime_coins' => $request->user()->lifetime_coins,
-                'pending_rewards' => floor($request->user()->lifetime_coins / 10),
+                'redeemed_reward_coins' => $redeemedCoins,
+                'pending_rewards' => floor($unclaimedCoins / 100000) * 50,
             ],
         ], 201);
     }
@@ -141,11 +148,16 @@ class GameSessionController extends Controller
         // Mock FCM Push notification
         Log::info("FCM Push sent to user {$request->user()->id}: Delivery complete! You earned {$finalCoins} coins this run.");
 
+        $redeemedCoins = DB::table('reward_redemptions')
+            ->where('user_id', $request->user()->id)
+            ->sum('amount') / 50 * 100000;
+
         return response()->json([
             'data' => [
                 'best_score' => $best->best_score,
                 'reward_coins' => $finalCoins,
                 'lifetime_coins' => $request->user()->fresh()->lifetime_coins,
+                'redeemed_reward_coins' => $redeemedCoins,
             ],
         ]);
     }
@@ -154,16 +166,21 @@ class GameSessionController extends Controller
     {
         $user = $request->user();
         
-        if ($user->lifetime_coins < 10) {
+        $redeemedCoins = DB::table('reward_redemptions')
+            ->where('user_id', $user->id)
+            ->sum('amount') / 50 * 100000;
+            
+        $unclaimedCoins = max(0, $user->lifetime_coins - $redeemedCoins);
+        
+        if ($unclaimedCoins < 100000) {
             return response()->json([
                 'message' => 'Insufficient coins to redeem.',
             ], 400);
         }
 
-        $amount = floor($user->lifetime_coins / 10);
-        $remainingCoins = $user->lifetime_coins % 10;
+        $amount = floor($unclaimedCoins / 100000) * 50;
 
-        DB::transaction(function () use ($user, $amount, $remainingCoins) {
+        DB::transaction(function () use ($user, $amount) {
             DB::table('reward_redemptions')->insert([
                 'user_id' => $user->id,
                 'amount' => $amount,
@@ -172,18 +189,17 @@ class GameSessionController extends Controller
                 'updated_at' => Carbon::now(),
             ]);
 
-            $user->update(['lifetime_coins' => $remainingCoins]);
-
+            // We do NOT reset lifetime_coins here anymore!
+            
             // TODO: Credit User Wallet (Stripe, Internal Ledger, etc.)
             // $user->wallet()->increment('balance', $amount);
         });
 
-        Log::info("User {$user->id} redeemed {$amount} rewards and remaining lifetime_coins: {$remainingCoins}.");
+        Log::info("User {$user->id} redeemed ₹{$amount} rewards.");
 
         return response()->json([
             'data' => [
-                'lifetime_coins' => $remainingCoins,
-                'pending_rewards' => 0,
+                'ok' => true,
             ],
         ]);
     }

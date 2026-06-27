@@ -16,6 +16,7 @@ class StartSessionResult {
   final int bestScore;
   final int lifetimeCoins;
   final int pendingRewards;
+  final int? redeemedRewardCoins;
 
   StartSessionResult({
     required this.sessionId,
@@ -24,6 +25,7 @@ class StartSessionResult {
     required this.bestScore,
     required this.lifetimeCoins,
     required this.pendingRewards,
+    this.redeemedRewardCoins,
   });
 
   factory StartSessionResult.fromJson(Map<String, dynamic> j) {
@@ -34,6 +36,7 @@ class StartSessionResult {
       bestScore: j['best_score'] ?? 0,
       lifetimeCoins: j['lifetime_coins'] ?? 0,
       pendingRewards: j['pending_rewards'] ?? 0,
+      redeemedRewardCoins: j['redeemed_reward_coins'],
     );
   }
 }
@@ -42,11 +45,13 @@ class CompleteSessionResult {
   final int bestScore;
   final int rewardCoins;
   final int lifetimeCoins;
+  final int? redeemedRewardCoins;
 
   CompleteSessionResult({
     required this.bestScore, 
     required this.rewardCoins,
     required this.lifetimeCoins,
+    this.redeemedRewardCoins,
   });
 
   factory CompleteSessionResult.fromJson(Map<String, dynamic> j) {
@@ -54,6 +59,7 @@ class CompleteSessionResult {
       bestScore: j['best_score'] ?? 0,
       rewardCoins: j['reward_coins'] ?? 0,
       lifetimeCoins: j['lifetime_coins'] ?? 0,
+      redeemedRewardCoins: j['redeemed_reward_coins'],
     );
   }
 }
